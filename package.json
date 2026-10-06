@@ -1,0 +1,41 @@
+{
+  "name": "dsh-codex-parity",
+  "version": "0.1.0",
+  "description": "为 DeepSeek Harness (DSH Desktop) 加一个 Codex 风格的 Git 面板：会话头部 Git 按钮，提供提交、推送、切换分支、创建并切换与初始化仓库。",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/formal-host.mjs",
+  "files": [
+    "dist/formal-host.mjs",
+    "dist/formal-client.cjs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./dist/formal-host.mjs",
+    "./client": "./dist/formal-client.cjs",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "scripts": {
+    "test": "node tests/host.test.mjs && node tests/host-integration.test.mjs && node tests/client-contract.test.mjs && node tests/package.test.mjs",
+    "test:live": "node tests/live-verify.mjs",
+    "pack": "node scripts/pack.mjs"
+  }
+}
