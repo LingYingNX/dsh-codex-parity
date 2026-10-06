@@ -1,6 +1,7 @@
 # dsh-codex-parity
 
 为 DeepSeek Harness (DSH Desktop) 加一个 Codex 风格的 Git 面板。
+
 <img width="185" height="203" alt="QQ20261006-164336" src="https://github.com/user-attachments/assets/574006f1-4134-45dc-acaa-17f1aa65c579" />
 <img width="206" height="191" alt="QQ20261006-164327" src="https://github.com/user-attachments/assets/74954b22-1cff-486e-af5f-388e804fbe8c" />
 
