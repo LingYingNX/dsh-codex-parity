@@ -295,11 +295,22 @@ check('injects a single style tag keyed by plugin id', () => {
   assert.ok(styleTags[0].textContent.includes('.dcp-git-menu{'))
   assert.ok(styleTags[0].textContent.includes('.dcp-git-btn{'))
 })
-check('uses Source Han Sans at normal weight throughout', () => {
+check('uses Source Han Sans at light weight, scaled 1.2x', () => {
   const css = styleTags[0].textContent
-  assert.ok(css.includes('思源黑体 Normal'), 'the plugin should prefer the installed normal family')
+  assert.ok(css.includes('思源黑体 Light'), 'the plugin should prefer the installed light family')
   assert.ok(css.includes('"思源黑体"'), 'the base family is the fallback')
-  assert.ok(css.includes('font-weight:400'), 'text renders at normal weight')
+  assert.ok(css.includes('font-weight:300'), 'text renders at light weight')
+  assert.ok(css.includes('font-size:13.2px'), 'menu rows keep the 1.2x body size')
+  assert.ok(css.includes('.dcp-git-menu{position:fixed;z-index:2147483004;width:168px;'), 'the menu frame is 0.75x wide')
+  assert.ok(css.includes('.dcp-git-pop{position:fixed;z-index:2147483004;width:168px;'), 'the branch pop frame is 0.75x wide')
+  assert.ok(css.includes('.dcp-git-dialog{width:300px;'), 'the dialog frame is 0.75x wide')
+  assert.ok(!/width:(224|400)px/.test(css), 'the pre-scale frame sizes must be gone')
+  const sizes = [...css.matchAll(/font-size:([0-9.]+)px/g)].map((m) => Number(m[1]))
+  // The type scale: 12px UI body, 13.2px rows, and the small/xs end used by hints
+  // and notes. Anything outside this set means a stray, un-reviewed size slipped in.
+  const tiers = new Set([10.8, 11.4, 12, 12.6, 13.2, 13.8, 15.6])
+  const stray = sizes.filter((size) => !tiers.has(size))
+  assert.deepEqual(stray, [], `unscaled font sizes remain: ${stray.join(', ')}`)
   assert.ok(!/Outfit|JetBrains Mono/.test(css), 'previous display/mono fonts must be gone')
 })
 
@@ -342,6 +353,14 @@ check('1. the commit row reports how many files are uncommitted', () => {
   const markup = seam.gitMenuMarkup(gitState({ totals: { n: 5, add: 31, del: 39 } }))
   assert.ok(markup.includes('未提交 5 个'), 'the dirty count must render on the commit row')
   assert.ok(markup.includes('+31') && markup.includes('-39'), 'the totals must stay visible')
+})
+check('the 切换分支 row carries its own glyph', () => {
+  const markup = seam.gitMenuMarkup(gitState())
+  const row = markup.slice(markup.indexOf('data-act="switch"'), markup.indexOf('data-act="init"'))
+  assert.ok(row.includes('dcp-git-icon'), 'the switch row needs the list glyph')
+  assert.ok(row.includes('width="17"') && row.includes('height="17"'), 'the glyph is scaled 1.2x with the rows')
+  assert.ok(row.includes('viewBox="0 0 1024 1024"'), 'the glyph is a 1024-grid icon, not the 24-grid stroke set')
+  assert.ok(!row.includes('stroke="currentColor"'), 'a filled glyph must not inherit the stroke wrapper')
 })
 check('2. outside a repo only init is available', () => {
   actCalls.length = 0
@@ -428,6 +447,12 @@ check('the header button is installed and anchored to the workspace pill', () =>
   assert.ok(source.includes('installGitButton()'), 'the header button has to be installed')
   assert.ok(source.includes('data-conversation-header'), 'the button anchors on the conversation header')
   assert.ok(source.includes("closest('[data-open-target]')"), 'it sits outside the workspace split control')
+})
+check('the header button uses the Git glyph, not the branch stroke icon', () => {
+  const button = source.slice(source.indexOf("button.innerHTML ="), source.indexOf('group.parentNode.insertBefore(button, group)'))
+  assert.ok(button.includes("gitGlyph('git'"), 'the header button swaps to the Git glyph')
+  assert.ok(!button.includes("gitIcon('branch'"), 'the old branch stroke icon is gone from the button')
+  assert.ok(source.includes('dcp-git-icon'), 'the glyph wrapper class must exist')
 })
 check('the removed features leave no trace', () => {
   for (const gone of ['dcp-msg-actions', 'dcp-selbar', 'dcp-editor', 'dcp-ask', 'DeleteSession', 'installSidebarContextMenu', 'AskTab', 'trashSession', 'forkAt', 'promptSession']) {
