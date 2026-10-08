@@ -325,6 +325,7 @@ function gitState(over = {}) {
     isRepo: true,
     branch: 'main',
     mainBranch: 'main',
+    hasRemote: false,
     detachedSha: '',
     totals: { n: 0, add: 3, del: 1 },
     branches: [
@@ -345,7 +346,12 @@ function mount(kind, state, overrides = {}) {
 const actCalls = []
 function recordingDeps(over = {}) {
   return Object.assign(seam.deps(), {
-    act: (method, payload, message, target) => actCalls.push({ method, payload, message, target })
+    // Records the call and then runs `after`, the way the real gitAct does once its
+    // RPC settles — that is what makes the "commit, then switch" chain testable.
+    act: (method, payload, message, target, after) => {
+      actCalls.push({ method, payload, message, target })
+      if (typeof after === 'function') after()
+    }
   }, over)
 }
 
@@ -380,6 +386,14 @@ check('3. inside a repo init is disabled', () => {
   assert.equal(surface.node.querySelector('[data-act="commit"]').disabled, false)
   surface.close()
 })
+check('3b. 推送 stays greyed out until the repo has a remote', () => {
+  const noRemote = mount('menu', gitState({ hasRemote: false }))
+  assert.equal(noRemote.surface.node.querySelector('[data-act="push"]').disabled, true, 'no remote → 推送 disabled')
+  noRemote.surface.close()
+  const withRemote = mount('menu', gitState({ hasRemote: true }))
+  assert.equal(withRemote.surface.node.querySelector('[data-act="push"]').disabled, false, 'with a remote → 推送 enabled')
+  withRemote.surface.close()
+})
 check('4. the commit row opens a dialog whose confirm needs a message', () => {
   actCalls.length = 0
   document.body.children.length = 0
@@ -412,6 +426,46 @@ check('6. clicking a branch row switches to that branch', () => {
   assert.equal(actCalls.length, 1)
   assert.equal(actCalls[0].method, 'gitBranchSwitch')
   assert.deepEqual(actCalls[0].payload, { branch: 'topic/login' })
+  surface.close()
+})
+check('6b. a clean tree switches without asking', () => {
+  actCalls.length = 0
+  document.body.children.length = 0
+  const { surface } = mount('branchPop', gitState({ totals: { n: 0, add: 0, del: 0 } }), recordingDeps())
+  surface.node.querySelector('[data-branch="topic/login"]').click()
+  assert.deepEqual(actCalls.map((c) => c.method), ['gitBranchSwitch'])
+  assert.equal(document.body.querySelector('[data-git-choice]'), null, 'a clean tree must not open the warning')
+  surface.close()
+})
+check('6c. uncommitted files warn before switching, and 直接切换 still switches', () => {
+  actCalls.length = 0
+  document.body.children.length = 0
+  const { surface } = mount('branchPop', gitState({ totals: { n: 96, add: 31, del: 39 } }), recordingDeps())
+  surface.node.querySelector('[data-branch="topic/login"]').click()
+  assert.equal(actCalls.length, 0, 'a dirty tree must not switch before the user chooses')
+  const body = document.body.querySelector('.dcp-git-ask')
+  assert.ok(body, 'the warning dialog has to open')
+  assert.ok(body.textContent.includes('96'), 'the warning states how many files are uncommitted')
+  document.body.querySelector('[data-git-choice="switch"]').click()
+  assert.deepEqual(actCalls.map((c) => c.method), ['gitBranchSwitch'])
+  assert.deepEqual(actCalls[0].payload, { branch: 'topic/login' })
+  surface.close()
+})
+check('6d. 提交后切换 opens the commit dialog and switches only after the commit', () => {
+  actCalls.length = 0
+  document.body.children.length = 0
+  const { surface } = mount('branchPop', gitState({ totals: { n: 4, add: 1, del: 1 } }), recordingDeps())
+  surface.node.querySelector('[data-branch="topic/login"]').click()
+  document.body.querySelector('[data-git-choice="commit"]').click()
+  const input = document.body.querySelector('[data-git-input]')
+  assert.ok(input, 'the commit dialog has to open')
+  assert.equal(actCalls.length, 0, 'nothing is committed or switched before the message is confirmed')
+  input.value = 'fix the thing'
+  input.fire('input')
+  document.body.querySelector('[data-git-confirm]').click()
+  assert.deepEqual(actCalls.map((c) => c.method), ['gitCommit', 'gitBranchSwitch'], 'commit first, then switch')
+  assert.deepEqual(actCalls[0].payload, { message: 'fix the thing' })
+  assert.deepEqual(actCalls[1].payload, { branch: 'topic/login' })
   surface.close()
 })
 check('7. 创建并切换 opens the naming dialog', () => {

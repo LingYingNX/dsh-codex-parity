@@ -76,6 +76,7 @@
       '.dcp-git-field input,.dcp-git-field select{padding:6px 9px;border:1px solid #E9ECEA;border-radius:6px;background:#F6F8F6;font-family:inherit;font-size:12.6px;line-height:1.35;color:#15181A;outline:none}',
       '.dcp-git-field input:focus,.dcp-git-field select:focus{border-color:#C9D0CB;background:#FFFFFF}',
       '.dcp-git-warn{padding:7px 9px;border:1px solid #E9ECEA;border-radius:6px;background:#F6F8F6;font-size:11.4px;line-height:1.45;color:#8A9094}',
+      '.dcp-git-ask{margin:0;font-size:12.6px;line-height:1.55;color:#15181A}',
       '.dcp-git-dfoot{display:flex;justify-content:flex-end;gap:6px;padding:10px 12px;border-top:1px solid #EFF1EF;background:#FAFBFA}',
       '.dcp-git-btn2{padding:5px 12px;border:1px solid #E3E6E4;border-radius:6px;background:#FFFFFF;font:inherit;font-size:12.6px;line-height:1.35;color:#4F575A;cursor:pointer}',
       '.dcp-git-btn2:hover{background:#F1F4F1}',
@@ -309,8 +310,12 @@
       })
     }
 
-    /** Host call that mutates the repo, then a refresh + toast. */
-    function gitAct(method, payload, message, anchor) {
+    /**
+     * Host call that mutates the repo, then a refresh + toast. `after` runs once
+     * the mutation and its refresh have settled — used to chain "commit, then
+     * switch" without tripping the single-flight `gitBusy` guard.
+     */
+    function gitAct(method, payload, message, anchor, after) {
       if (gitBusy) return
       var sessionId = gitSessionId(anchor)
       if (sessionId === null) return
@@ -320,6 +325,8 @@
         gitBusy = false
         showToast(message)
         return gitRefresh(anchor)
+      }).then(function () {
+        if (typeof after === 'function') after()
       }).catch(function (error) {
         gitBusy = false
         showToast('Git 操作失败：' + error.message, { tone: 'error' })
@@ -355,7 +362,7 @@
         : ''
       return '<div class="dcp-git-summary">' + summary + '</div>' +
         '<button type="button" class="dcp-git-item" data-act="commit"' + (isRepo ? '' : ' disabled') + '><span>提交</span>' + dirtyCount + '</button>' +
-        '<button type="button" class="dcp-git-item" data-act="push"' + (isRepo ? '' : ' disabled') + '><span>推送</span></button>' +
+        '<button type="button" class="dcp-git-item" data-act="push"' + (isRepo && state.hasRemote === true ? '' : ' disabled') + '><span>推送</span></button>' +
         '<button type="button" class="dcp-git-item" data-act="switch"' + (isRepo ? '' : ' disabled') + '><span>切换分支</span>' + gitGlyph('list', 17) + '</button>' +
         '<button type="button" class="dcp-git-item" data-act="init"' + (isRepo ? ' disabled' : '') + '><span>初始化 Git</span></button>'
     }
@@ -368,16 +375,23 @@
 
     /** One text-input dialog shared by the branch-create and commit flows. */
     function gitDialogMarkup(spec) {
+      var body = spec.choices === undefined
+        ? '<div class="dcp-git-field"><label>' + gitEscape(spec.label) + '</label>' +
+            '<input data-git-input placeholder="' + gitEscape(spec.placeholder) + '"></div>'
+        : '<p class="dcp-git-ask">' + gitEscape(spec.body) + '</p>'
+      var foot = spec.choices === undefined
+        ? '<button type="button" class="dcp-git-btn2" data-git-cancel>取消</button>' +
+          '<button type="button" class="dcp-git-btn2" data-primary="1" data-git-confirm disabled>' + gitEscape(spec.confirmLabel) + '</button>'
+        : spec.choices.map(function (choice) {
+            return '<button type="button" class="dcp-git-btn2"' + (choice.primary === true ? ' data-primary="1"' : '') + ' data-git-choice="' + gitEscape(choice.value) + '">' + gitEscape(choice.label) + '</button>'
+          }).join('')
       return '<div class="dcp-git-dialog">' +
         '<div class="dcp-git-dhead"><span>' + gitEscape(spec.title) + '</span>' +
         '<button type="button" class="dcp-git-x" data-git-cancel>✕</button></div>' +
-        '<div class="dcp-git-dbody">' +
-          '<div class="dcp-git-field"><label>' + gitEscape(spec.label) + '</label>' +
-            '<input data-git-input placeholder="' + gitEscape(spec.placeholder) + '"></div>' +
+        '<div class="dcp-git-dbody">' + body +
           (spec.warn === undefined ? '' : '<div class="dcp-git-warn"><span>' + gitEscape(spec.warn) + '</span></div>') +
         '</div>' +
-        '<div class="dcp-git-dfoot"><button type="button" class="dcp-git-btn2" data-git-cancel>取消</button>' +
-        '<button type="button" class="dcp-git-btn2" data-primary="1" data-git-confirm disabled>' + gitEscape(spec.confirmLabel) + '</button></div>' +
+        '<div class="dcp-git-dfoot">' + foot + '</div>' +
       '</div>'
     }
 
@@ -438,7 +452,10 @@
             if (node.getAttribute('data-disabled') === '1') return
             var branch = node.getAttribute('data-branch')
             deps.close()
-            deps.act('gitBranchSwitch', { branch: branch }, '已切换到分支 ' + branch, anchor)
+            // Uncommitted work rides along on a checkout, so the user decides whether
+            // to commit it first. A clean tree switches straight away.
+            if (state.totals.n > 0) deps.askDirtySwitch(anchor, state, branch)
+            else deps.switchBranch(branch, anchor)
           })
         })
       }
@@ -464,6 +481,12 @@
       })
       var input = dialog.querySelector('[data-git-input]')
       var confirm = dialog.querySelector('[data-git-confirm]')
+      if (spec.choices !== undefined) {
+        Array.prototype.forEach.call(dialog.querySelectorAll('[data-git-choice]'), function (node) {
+          node.addEventListener('click', function () { spec.onChoice(node.getAttribute('data-git-choice')) })
+        })
+        return { node: dialog, close: function () { unmountNode(dialog) } }
+      }
       var submit = function () {
         var value = input.value.trim()
         if (value === '') return
@@ -494,11 +517,17 @@
         close: closeGitSurface,
         openBranchPop: null,
         openCommitDialog: null,
-        openCreateDialog: null
+        openCreateDialog: null,
+        switchBranch: null,
+        askDirtySwitch: null
       }
       deps.openBranchPop = function (anchor) { openGitBranchPop(anchor, deps) }
       deps.openCommitDialog = function (anchor) { openGitCommitDialog(anchor, deps) }
       deps.openCreateDialog = function (anchor, state) { openGitBranchCreateDialog(anchor, state, deps) }
+      deps.switchBranch = function (branch, anchor) {
+        deps.act('gitBranchSwitch', { branch: branch }, '已切换到分支 ' + branch, anchor)
+      }
+      deps.askDirtySwitch = function (anchor, state, branch) { openGitDirtySwitchDialog(anchor, state, branch, deps) }
       return Object.assign(deps, overrides || {})
     }
 
@@ -519,7 +548,7 @@
       gitPop = mountGitBranchPop(anchor, state, deps).node
     }
 
-    function openGitCommitDialog(anchor, deps) {
+    function openGitCommitDialog(anchor, deps, thenSwitchTo) {
       deps.close()
       gitDialog = mountGitDialog({
         title: '提交',
@@ -529,7 +558,9 @@
         warn: '将暂存全部未提交文件（git add -A）',
         onCancel: deps.close,
         onConfirm: function (message) {
-          deps.act('gitCommit', { message: message }, '已提交', anchor)
+          deps.act('gitCommit', { message: message }, '已提交', anchor, function () {
+            if (thenSwitchTo !== undefined) deps.switchBranch(thenSwitchTo, anchor)
+          })
           deps.close()
         }
       }).node
@@ -551,6 +582,28 @@
           }
           deps.close()
           deps.act('gitBranchCreate', { name: branch, base: base }, '已创建并切换到分支 ' + branch, anchor)
+        }
+      }).node
+    }
+
+    /**
+     * Switching away with uncommitted work: say how much is at stake and let the
+     * user either commit it first or ride the changes over to the other branch.
+     */
+    function openGitDirtySwitchDialog(anchor, state, branch, deps) {
+      deps.close()
+      gitDialog = mountGitDialog({
+        title: '切换分支',
+        body: '当前分支「' + (state.branch || 'HEAD') + '」有 ' + state.totals.n + ' 个未提交文件。先提交再切换，还是直接把改动带过去？',
+        choices: [
+          { value: 'commit', label: '提交后切换', primary: true },
+          { value: 'switch', label: '直接切换' }
+        ],
+        onCancel: deps.close,
+        onChoice: function (choice) {
+          deps.close()
+          if (choice === 'commit') openGitCommitDialog(anchor, deps, branch)
+          else deps.switchBranch(branch, anchor)
         }
       }).node
     }

@@ -165,20 +165,29 @@ async function gitState(ctx, payload) {
       detachedSha: '',
       branches: [],
       blockedBranches: [],
+      hasRemote: false,
       totals: { n: 0, add: 0, del: 0 }
     }
   }
-  const [branchOut, shaOut, refsOut, statusOut, numstatOut, wtOut] = await Promise.all([
+  const [branchOut, symOut, shaOut, refsOut, statusOut, numstatOut, wtOut, remoteOut] = await Promise.all([
     gitExec(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    // `rev-parse` cannot name a branch that has no commit yet, but the symbolic
+    // ref still can: a fresh `git init` knows it is on `master`/`main` already.
+    gitExec(cwd, ['symbolic-ref', '--short', 'HEAD']),
     gitExec(cwd, ['rev-parse', '--short', 'HEAD']),
     gitExec(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']),
     gitExec(cwd, ['status', '--porcelain=v1', '-b']),
     gitExec(cwd, ['diff', '--numstat', 'HEAD']),
-    gitExec(cwd, ['worktree', 'list', '--porcelain'])
+    gitExec(cwd, ['worktree', 'list', '--porcelain']),
+    // Whether any remote is configured at all; the client greys out 推送 without one.
+    gitExec(cwd, ['remote'])
   ])
   const worktrees = parseWorktrees(wtOut.stdout)
   const status = parseStatus(statusOut.stdout, numstatOut.stdout)
-  const headRef = branchOut.ok ? branchOut.stdout.trim() : 'HEAD'
+  // `rev-parse` fails on a branch with no commit yet (a fresh `git init`), so fall
+  // back to the symbolic ref, which still knows which branch HEAD points at.
+  const unbornBranch = !branchOut.ok && symOut.ok ? symOut.stdout.trim() : ''
+  const headRef = branchOut.ok ? branchOut.stdout.trim() : (unbornBranch === '' ? 'HEAD' : unbornBranch)
   const sha = shaOut.ok ? shaOut.stdout.trim() : ''
   const detached = headRef === 'HEAD'
   // Worktrees other than this checkout; their branches cannot be switched to here.
@@ -197,6 +206,9 @@ async function gitState(ctx, payload) {
       note: holder === undefined ? undefined : `已检出在 ${basename(holder.path)}`
     })
   }
+  // A branch with no commits has no ref for `for-each-ref` to list, so the
+  // symbolic ref above is the only evidence it exists; show it as the current one.
+  if (unbornBranch !== '') branches.push({ name: unbornBranch, current: true, note: '还没有提交' })
   const totals = status.reduce((acc, file) => ({ n: acc.n + 1, add: acc.add + file.add, del: acc.del + file.del }), { n: 0, add: 0, del: 0 })
   return {
     isRepo: true,
@@ -206,6 +218,7 @@ async function gitState(ctx, payload) {
     detachedSha: sha,
     branches,
     blockedBranches: elsewhere.map((item) => ({ branch: item.branch, path: item.path })),
+    hasRemote: remoteOut.ok && remoteOut.stdout.trim() !== '',
     totals
   }
 }
@@ -270,7 +283,10 @@ async function gitBranchCreate(ctx, payload) {
   const name = assertBranchName(payload?.name)
   const base = assertBranchName(payload?.base)
   const cwd = await requireRepo(ctx, sessionId)
-  const out = await gitExec(cwd, ['switch', '-c', name, base])
+  // A repo with no commits yet has no ref for `<base>` to resolve, but creating a
+  // branch off the unborn HEAD works when no base is named.
+  const head = await gitExec(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+  const out = await gitExec(cwd, head.ok ? ['switch', '-c', name, base] : ['switch', '-c', name])
   if (!out.ok) throw new RpcError('git-failed', out.stderr.trim() || `create ${name} failed`)
   return gitState(ctx, { sessionId })
 }

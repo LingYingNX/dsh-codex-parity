@@ -205,6 +205,7 @@ try {
     await run('git', ['-C', repo, 'branch', 'topic/login'])
     const result = await callRoute(harness.routes, 'gitState', { sessionId: 'session-git-1' })
     assert.equal(result.ok, true, result.ok ? '' : result.error.message)
+    assert.equal(result.value.hasRemote, true, 'adding a remote has to show up as hasRemote')
     const names = result.value.branches.map((item) => item.name)
     assert.ok(names.includes('topic/login'), `slashed local branch must be listed, got ${names.join(', ')}`)
     assert.ok(!names.some((name) => name.startsWith('origin/')), `remote aliases must be hidden, got ${names.join(', ')}`)
@@ -260,6 +261,20 @@ try {
     const init = await callRoute(plainHarness.routes, 'gitInit', { sessionId: 'session-plain-1' })
     assert.equal(init.ok, true, init.ok ? '' : init.error.message)
     assert.equal(init.value.isRepo, true)
+    // A fresh repo has no commits yet: the branch exists only as a symbolic ref,
+    // so the panel must still name it instead of showing HEAD with an empty list.
+    const expected = (await run('git', ['-C', plainDir, 'symbolic-ref', '--short', 'HEAD'])).stdout.trim()
+    assert.equal(init.value.branch, expected, 'a commitless repo still reports its branch name')
+    assert.notEqual(init.value.branch, null, 'an unborn branch must not be reported as detached')
+    assert.deepEqual(init.value.branches.map((item) => item.name), [expected], 'the unborn branch is listed')
+    assert.equal(init.value.branches[0].current, true)
+    const created = await callRoute(plainHarness.routes, 'gitBranchCreate', {
+      sessionId: 'session-plain-1',
+      name: 'topic/first',
+      base: expected
+    })
+    assert.equal(created.ok, true, created.ok ? '' : created.error.message)
+    assert.equal(created.value.branch, 'topic/first', 'a commitless repo can still create and switch')
     const again = await callRoute(plainHarness.routes, 'gitInit', { sessionId: 'session-plain-1' })
     assert.equal(again.ok, false)
     assert.equal(again.error.code, 'already-repo')
