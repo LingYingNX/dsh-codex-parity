@@ -45,7 +45,9 @@ dsh plugin --profile desktop remove dsh-codex-parity
 
 工作目录来自会话 header 记录的 `cwd`；所有 Git 操作都在该目录真实执行。
 
-客户端只注册一个槽位：`shell.overlay`（操作 toast）。Git 按钮是直接挂到会话头部 DOM 上的，不占用任何被 DSH 官方注册的 keyed slot。
+客户端注册两个槽位：`shell.overlay`（操作 toast）与 `conversation.session.header.utilities`（Git 入口按钮）。该槽 `kind: list` 且升序渲染，原生工作区 pill（`open-in-app`）占 `order: -10`；Git 按钮用 `order: -20` 注册，因此落在它紧左侧、独立成组。按钮的 DOM 由宿主渲染持有，插件不做 DOM 注入也不轮询。
+
+菜单与弹窗是挂在 `document.body` 上的浮层，靠内联 `position:fixed` 定位；插件样式表在每次挂载浮层时重新断言，宿主清理后无需重启即可恢复。
 
 ## 开发
 

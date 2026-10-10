@@ -48,11 +48,14 @@ check('declares a web client with injections', () => {
   assert.ok(Array.isArray(manifest.dsh.client.inject))
   assert.deepEqual(manifest.dsh.client.inject, [
     '@deepseek-ai/dsh-client-ui-slots',
-    '@deepseek-ai/dsh-client-connection'
+    '@deepseek-ai/dsh-client-connection',
+    '@deepseek-ai/dsh-client-ui-conversation'
   ])
 })
-check('injects the slot registry', () => {
+check('injects the slot registry and the package that declares the header slot', () => {
   assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-slots'))
+  assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-conversation'),
+    'the header utilities slot is declared by ui-conversation; declaring it keeps the load order right')
 })
 check('states a dsh version range', () => {
   assert.match(manifest.engines.dsh, /0\.2/)

@@ -18,6 +18,11 @@
 
     var RPC_CHANNEL = '/codex-parity'
     var LOG = '[dsh-codex-parity]'
+    // The header's right-aligned session utilities, ordered ascending. The shell's
+    // own workspace pill (open-in-app) sits at -10, so a smaller order puts the Git
+    // button immediately to its left.
+    var HEADER_SLOT = 'conversation.session.header.utilities'
+    var HEADER_ORDER = -20
 
     //#region styles
 
@@ -87,12 +92,30 @@
       '.dcp-git-brow[data-disabled="1"] .dcp-git-bname{color:#9AA0A3}'
     ].join('')
 
+    // The stylesheet's identity, in the two attributes the host ecosystem uses:
+    // `data-plugin` marks the owning package (the host's module manager matches on
+    // it when it reclaims a plugin's styles), `data-plugin-css` is the per-stylesheet
+    // key the shipped packages dedupe on.
+    var STYLE_ID = pluginId + '/client.css'
+
+    /**
+     * Deliberately re-asserted on every mount, not just at `apply()`.
+     *
+     * The host's client-modules drops `style[data-plugin="<id>"]` whenever it
+     * replaces or prunes a module entry, and it only re-runs `apply()` for entries
+     * it manages. A plugin loaded through `__ModuleLoader__.load` therefore loses
+     * its CSS for good, and with it the fixed positioning of every surface. Re-inserting
+     * here means the next click repairs the damage instead of needing a restart.
+     */
     function insertStyles() {
       if (typeof document === 'undefined') return
-      var tag = document.querySelector('style[data-plugin="' + pluginId + '"]')
+      var tag = document.querySelector('style[data-plugin-css="' + STYLE_ID + '"]')
+      // Called from every mount, so the healthy case has to be free of work.
+      if (tag !== null && tag.textContent === CSS) return
       if (tag === null) {
         tag = document.createElement('style')
         tag.dataset.plugin = pluginId
+        tag.dataset.pluginCss = STYLE_ID
         document.head.appendChild(tag)
       }
       tag.textContent = CSS
@@ -141,6 +164,32 @@
 
     //#region rpc
 
+    /** How long one host call may take before it is treated as lost. */
+    var RPC_DEADLINE_MS = 30000
+
+    /**
+     * Race a host call against a deadline.
+     *
+     * A desktop connection that has gone half-open leaves `connection.rpc.call`
+     * pending forever, and the menu only opens once `gitState` resolves — so a lost
+     * call used to present as a dead button, with every later action dropped by the
+     * `gitBusy` guard. Failing on a deadline turns both back into a visible error.
+     */
+    function withDeadline(promise, method) {
+      return new Promise(function (resolve, reject) {
+        var timer = globalThis.setTimeout(function () {
+          reject(new Error('宿主无响应（' + method + '）'))
+        }, RPC_DEADLINE_MS)
+        promise.then(function (value) {
+          globalThis.clearTimeout(timer)
+          resolve(value)
+        }, function (error) {
+          globalThis.clearTimeout(timer)
+          reject(error)
+        })
+      })
+    }
+
     function rpcCall(method, payload) {
       var connection = state.connection
       if (connection === null || connection.rpc === undefined) {
@@ -150,7 +199,7 @@
       var invoke = function (channel) {
         return connection.rpc.call(channel, method, body)
       }
-      return invoke('/api').catch(function (error) {
+      return withDeadline(invoke('/api').catch(function (error) {
         var message = error instanceof Error ? error.message : String(error)
         if (!/HTTP (404|405)/.test(message)) throw error
         return invoke(RPC_CHANNEL)
@@ -169,7 +218,7 @@
           }
         }
         return result
-      })
+      }), method)
     }
 
     //#endregion
@@ -333,12 +382,20 @@
       })
     }
 
+    /**
+     * Anchor one floating surface under the button.
+     *
+     * `position:fixed` is written inline rather than left to the stylesheet: that
+     * rule is the difference between a visible menu and one appended to the end of
+     * `<body>`, out of view, and the stylesheet can be removed under us.
+     */
     function gitPlace(node, anchor) {
       var rect = anchor.getBoundingClientRect()
       var box = node.getBoundingClientRect()
       var left = Math.max(10, Math.min(rect.right - GIT_PANEL_WIDTH, globalThis.innerWidth - GIT_PANEL_WIDTH - 10))
       var top = rect.bottom + 6
       if (top + box.height > globalThis.innerHeight - 10) top = Math.max(10, rect.top - box.height - 6)
+      node.style.position = 'fixed'
       node.style.left = left + 'px'
       node.style.top = top + 'px'
     }
@@ -402,6 +459,7 @@
      * with the caller (`closeGitSurface`).
      */
     function mountGitMenu(anchor, state, deps) {
+      insertStyles()
       var menu = document.createElement('div')
       menu.className = 'dcp-git-menu'
       menu.innerHTML = gitMenuMarkup(state)
@@ -424,6 +482,7 @@
 
     /** The branch list, its search box and the create-and-switch flow. */
     function mountGitBranchPop(anchor, state, deps) {
+      insertStyles()
       var pop = document.createElement('div')
       pop.className = 'dcp-git-pop'
       pop.innerHTML = gitBranchPopMarkup()
@@ -470,6 +529,7 @@
 
     /** The shared naming/message dialog. */
     function mountGitDialog(spec) {
+      insertStyles()
       var dialog = document.createElement('div')
       dialog.className = 'dcp-git-backdrop'
       dialog.innerHTML = gitDialogMarkup(spec)
@@ -608,41 +668,42 @@
       }).node
     }
 
-    /** Keep our button immediately left of the shell's workspace pill. */
-    function installGitButton() {
-      if (typeof document === 'undefined') return function () {}
-      var mount = function () {
-        var folder = null
-        var buttons = document.querySelectorAll('[data-conversation-header] button, [data-conversation-header-corner] button')
-        for (var index = 0; index < buttons.length; index += 1) {
-          var label = buttons[index].getAttribute('aria-label') || ''
-          if (/文件资源管理器|open in|folder/i.test(label)) { folder = buttons[index]; break }
-        }
-        if (folder === null) return
-        // The folder button lives inside a Tooltip inside the split control;
-        // anchor on the split itself so the Git button stays outside it.
-        var group = folder.closest ? folder.closest('[data-open-target]') : null
-        if (group === null || group === folder) group = folder
-        var existing = document.querySelector('.dcp-git-btn')
-        if (existing !== null) {
-          if (existing.nextSibling !== group) group.parentNode.insertBefore(existing, group)
-          return
-        }
-        var button = document.createElement('button')
-        button.type = 'button'
-        button.className = 'dcp-git-btn'
-        button.setAttribute('aria-label', 'Git 操作')
-        button.innerHTML = gitGlyph('git', 14) + '<span>Git</span>'
-        button.addEventListener('mousedown', function (event) { event.preventDefault() })
-        button.addEventListener('click', function (event) {
+    /** The button's inner markup: the Git glyph plus its label. */
+    function gitButtonHtml() {
+      return gitGlyph('git', 14) + '<span>Git</span>'
+    }
+
+    /**
+     * The header entry button, as a slot occupant.
+     *
+     * The host's header renderer creates and owns this node, so it is re-created with
+     * the header instead of being chased back into place by a timer — and it inherits
+     * the host's theme variables, hover state and drag-region handling for free. The
+     * handler passes the node itself as the anchor the floating surfaces position off.
+     */
+    function GitButton() {
+      return React.createElement('button', {
+        type: 'button',
+        className: 'dcp-git-btn',
+        'aria-label': 'Git 操作',
+        onMouseDown: function (event) { event.preventDefault() },
+        onClick: function (event) {
           event.preventDefault()
           event.stopPropagation()
-          toggleGitMenu(button)
-        })
-        group.parentNode.insertBefore(button, group)
-      }
-      mount()
-      var timer = globalThis.setInterval(mount, 1500)
+          toggleGitMenu(event.currentTarget)
+        },
+        dangerouslySetInnerHTML: { __html: gitButtonHtml() }
+      })
+    }
+
+    /**
+     * Dismiss the floating surfaces on an outside click or Escape.
+     *
+     * The button belongs to the slot system, which owns mounting and cleanup, so only
+     * these document-level listeners live here.
+     */
+    function installDismissal() {
+      if (typeof document === 'undefined') return function () {}
       var onDown = function (event) {
         if (gitMenu === null && gitPop === null && gitDialog === null) return
         if (event.target.closest && (event.target.closest('.dcp-git-btn') !== null ||
@@ -653,12 +714,9 @@
       document.addEventListener('mousedown', onDown, true)
       document.addEventListener('keydown', onKey, true)
       return function () {
-        globalThis.clearInterval(timer)
         document.removeEventListener('mousedown', onDown, true)
         document.removeEventListener('keydown', onKey, true)
         closeGitSurface()
-        var button = document.querySelector('.dcp-git-btn')
-        if (button !== null && button.parentNode !== null) button.parentNode.removeChild(button)
       }
     }
 
@@ -678,6 +736,10 @@
         mountGitMenu: mountGitMenu,
         mountGitBranchPop: mountGitBranchPop,
         mountGitDialog: mountGitDialog,
+        GitButton: GitButton,
+        rpcCall: rpcCall,
+        HEADER_SLOT: HEADER_SLOT,
+        HEADER_ORDER: HEADER_ORDER,
         deps: gitSurfaceDeps
       },
       apply: function (ctx) {
@@ -693,16 +755,24 @@
 
         insertStyles()
 
-        var releaseGitButton = installGitButton()
+        var releaseDismissal = installDismissal()
 
         var slots = ctx.get('slots')
         slots.inject('shell.overlay', function () {
           return slots.register({ name: 'shell.overlay', id: 'codex-parity-toast' }, ToastHost)
         })
 
+        // The Git entry button is an ordinary slot occupant, exactly like the shell's
+        // own workspace pill and open-in-app actions. Registering here means the host
+        // renders and owns the node: no DOM injection, no re-anchoring timer, and the
+        // stylesheet-removal failure that came with them cannot reach the button.
+        slots.inject(HEADER_SLOT, function () {
+          return slots.register({ name: HEADER_SLOT, id: 'codex-parity-git', order: HEADER_ORDER }, GitButton)
+        })
+
         ctx.effect(function () {
           return function () {
-            releaseGitButton()
+            releaseDismissal()
             listeners.clear()
           }
         }, 'dsh-codex-parity: client lifetime')
