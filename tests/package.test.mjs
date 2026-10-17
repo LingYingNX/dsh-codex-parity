@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
-const tarball = join(root, 'release', `${manifest.name}-${manifest.version}.tgz`)
+const tarball = join(root, 'release', `${manifest.name}.tgz`)
 
 let passed = 0
 let failed = 0

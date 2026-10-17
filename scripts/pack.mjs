@@ -16,7 +16,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const stage = join(root, '.pack', 'package')
 const outDir = join(root, 'release')
-const outFile = join(outDir, `${manifest.name}-${manifest.version}.tgz`)
+const outFile = join(outDir, `${manifest.name}.tgz`)
 
 await rm(join(root, '.pack'), { recursive: true, force: true })
 await mkdir(stage, { recursive: true })

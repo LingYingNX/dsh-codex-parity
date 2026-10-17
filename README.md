@@ -25,7 +25,7 @@
 ## 安装
 
 ```powershell
-dsh plugin --profile desktop add <插件目录>\release\dsh-codex-parity-0.1.0.tgz
+dsh plugin --profile desktop add <插件目录>\release\dsh-codex-parity.tgz
 ```
 
 卸载：
